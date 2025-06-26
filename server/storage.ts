@@ -1,18 +1,23 @@
 import { tasks, users, type User, type InsertUser, type Task, type InsertTask, type UpdateTask } from "@shared/schema";
+import { db } from "./db";
+import { eq, and } from "drizzle-orm";
+import bcrypt from "bcryptjs";
 
 export interface IStorage {
   // User methods
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  validateUser(username: string, password: string): Promise<User | null>;
 
   // Task methods
-  getTasks(): Promise<Task[]>;
-  getTask(id: number): Promise<Task | undefined>;
-  createTask(task: InsertTask): Promise<Task>;
-  updateTask(id: number, updates: Partial<UpdateTask>): Promise<Task | undefined>;
-  deleteTask(id: number): Promise<boolean>;
-  getTaskStats(): Promise<{
+  getTasks(userId: number): Promise<Task[]>;
+  getTask(id: number, userId: number): Promise<Task | undefined>;
+  createTask(task: InsertTask & { userId: number }): Promise<Task>;
+  updateTask(id: number, userId: number, updates: Partial<UpdateTask>): Promise<Task | undefined>;
+  deleteTask(id: number, userId: number): Promise<boolean>;
+  getTaskStats(userId: number): Promise<{
     total: number;
     completed: number;
     pending: number;
@@ -20,95 +25,93 @@ export interface IStorage {
   }>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<number, User>;
-  private tasks: Map<number, Task>;
-  private currentUserId: number;
-  private currentTaskId: number;
-
-  constructor() {
-    this.users = new Map();
-    this.tasks = new Map();
-    this.currentUserId = 1;
-    this.currentTaskId = 1;
-  }
-
+export class DatabaseStorage implements IStorage {
   // User methods
   async getUser(id: number): Promise<User | undefined> {
-    return this.users.get(id);
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user || undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user || undefined;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = this.currentUserId++;
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
+    const hashedPassword = await bcrypt.hash(insertUser.password, 12);
+    const [user] = await db
+      .insert(users)
+      .values({
+        ...insertUser,
+        password: hashedPassword,
+      })
+      .returning();
     return user;
   }
 
+  async validateUser(username: string, password: string): Promise<User | null> {
+    const user = await this.getUserByUsername(username);
+    if (!user) return null;
+
+    const isValid = await bcrypt.compare(password, user.password);
+    return isValid ? user : null;
+  }
+
   // Task methods
-  async getTasks(): Promise<Task[]> {
-    return Array.from(this.tasks.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+  async getTasks(userId: number): Promise<Task[]> {
+    return await db.select().from(tasks)
+      .where(eq(tasks.userId, userId))
+      .orderBy(tasks.createdAt);
   }
 
-  async getTask(id: number): Promise<Task | undefined> {
-    return this.tasks.get(id);
+  async getTask(id: number, userId: number): Promise<Task | undefined> {
+    const [task] = await db.select().from(tasks)
+      .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+    return task || undefined;
   }
 
-  async createTask(insertTask: InsertTask): Promise<Task> {
-    const id = this.currentTaskId++;
-    const now = new Date();
-    const task: Task = {
-      ...insertTask,
-      id,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.tasks.set(id, task);
+  async createTask(taskData: InsertTask & { userId: number }): Promise<Task> {
+    const [task] = await db
+      .insert(tasks)
+      .values(taskData)
+      .returning();
     return task;
   }
 
-  async updateTask(id: number, updates: Partial<UpdateTask>): Promise<Task | undefined> {
-    const existingTask = this.tasks.get(id);
-    if (!existingTask) {
-      return undefined;
-    }
-
-    const updatedTask: Task = {
-      ...existingTask,
-      ...updates,
-      id,
-      updatedAt: new Date(),
-    };
-
-    this.tasks.set(id, updatedTask);
-    return updatedTask;
+  async updateTask(id: number, userId: number, updates: Partial<UpdateTask>): Promise<Task | undefined> {
+    const [task] = await db
+      .update(tasks)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(and(eq(tasks.id, id), eq(tasks.userId, userId)))
+      .returning();
+    return task;
   }
 
-  async deleteTask(id: number): Promise<boolean> {
-    return this.tasks.delete(id);
+  async deleteTask(id: number, userId: number): Promise<boolean> {
+    const result = await db
+      .delete(tasks)
+      .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+    return (result.rowCount || 0) > 0;
   }
 
-  async getTaskStats(): Promise<{
+  async getTaskStats(userId: number): Promise<{
     total: number;
     completed: number;
     pending: number;
     overdue: number;
   }> {
-    const tasks = Array.from(this.tasks.values());
-    const total = tasks.length;
-    const completed = tasks.filter(task => task.completed).length;
-    const pending = tasks.filter(task => !task.completed).length;
+    const userTasks = await db.select().from(tasks).where(eq(tasks.userId, userId));
+    const total = userTasks.length;
+    const completed = userTasks.filter(task => task.completed).length;
+    const pending = userTasks.filter(task => !task.completed).length;
     
     const now = new Date();
-    const overdue = tasks.filter(task => 
+    const overdue = userTasks.filter(task => 
       !task.completed && 
       task.dueDate && 
       new Date(task.dueDate) < now
@@ -123,4 +126,4 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
