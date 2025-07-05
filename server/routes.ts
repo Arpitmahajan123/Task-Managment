@@ -114,35 +114,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get all tasks (protected)
-  app.get("/api/tasks", requireAuth, async (req: any, res) => {
+  // Get all tasks
+  app.get("/api/tasks", async (req, res) => {
     try {
-      const tasks = await storage.getTasks(req.session.userId);
+      const tasks = await storage.getTasks();
       res.json(tasks);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch tasks" });
     }
   });
 
-  // Get task stats (protected)
-  app.get("/api/tasks/stats", requireAuth, async (req: any, res) => {
+  // Get task stats
+  app.get("/api/tasks/stats", async (req, res) => {
     try {
-      const stats = await storage.getTaskStats(req.session.userId);
+      const stats = await storage.getTaskStats();
       res.json(stats);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch task statistics" });
     }
   });
 
-  // Get single task (protected)
-  app.get("/api/tasks/:id", requireAuth, async (req: any, res) => {
+  // Get single task
+  app.get("/api/tasks/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
         return res.status(400).json({ message: "Invalid task ID" });
       }
 
-      const task = await storage.getTask(id, req.session.userId);
+      const task = await storage.getTask(id);
       if (!task) {
         return res.status(404).json({ message: "Task not found" });
       }
@@ -153,11 +153,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Create new task (protected)
-  app.post("/api/tasks", requireAuth, async (req: any, res) => {
+  // Create new task
+  app.post("/api/tasks", async (req, res) => {
     try {
       const validatedData = insertTaskSchema.parse(req.body);
-      const task = await storage.createTask({ ...validatedData, userId: req.session.userId });
+      const task = await storage.createTask(validatedData);
       res.status(201).json(task);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -170,8 +170,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Update task (protected)
-  app.patch("/api/tasks/:id", requireAuth, async (req: any, res) => {
+  // Update task
+  app.patch("/api/tasks/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -179,7 +179,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const validatedData = updateTaskSchema.omit({ id: true }).parse(req.body);
-      const task = await storage.updateTask(id, req.session.userId, validatedData);
+      const task = await storage.updateTask(id, validatedData);
       
       if (!task) {
         return res.status(404).json({ message: "Task not found" });
@@ -197,15 +197,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Delete task (protected)
-  app.delete("/api/tasks/:id", requireAuth, async (req: any, res) => {
+  // Delete task
+  app.delete("/api/tasks/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
         return res.status(400).json({ message: "Invalid task ID" });
       }
 
-      const deleted = await storage.deleteTask(id, req.session.userId);
+      const deleted = await storage.deleteTask(id);
       if (!deleted) {
         return res.status(404).json({ message: "Task not found" });
       }

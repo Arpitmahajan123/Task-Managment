@@ -12,12 +12,12 @@ export interface IStorage {
   validateUser(username: string, password: string): Promise<User | null>;
 
   // Task methods
-  getTasks(userId: number): Promise<Task[]>;
-  getTask(id: number, userId: number): Promise<Task | undefined>;
-  createTask(task: InsertTask & { userId: number }): Promise<Task>;
-  updateTask(id: number, userId: number, updates: Partial<UpdateTask>): Promise<Task | undefined>;
-  deleteTask(id: number, userId: number): Promise<boolean>;
-  getTaskStats(userId: number): Promise<{
+  getTasks(): Promise<Task[]>;
+  getTask(id: number): Promise<Task | undefined>;
+  createTask(task: InsertTask): Promise<Task>;
+  updateTask(id: number, updates: Partial<UpdateTask>): Promise<Task | undefined>;
+  deleteTask(id: number): Promise<boolean>;
+  getTaskStats(): Promise<{
     total: number;
     completed: number;
     pending: number;
@@ -62,56 +62,55 @@ export class DatabaseStorage implements IStorage {
     return isValid ? user : null;
   }
 
-  // Task methods
-  async getTasks(userId: number): Promise<Task[]> {
+  // Task methods (updated for non-authenticated mode)
+  async getTasks(): Promise<Task[]> {
     return await db.select().from(tasks)
-      .where(eq(tasks.userId, userId))
       .orderBy(tasks.createdAt);
   }
 
-  async getTask(id: number, userId: number): Promise<Task | undefined> {
+  async getTask(id: number): Promise<Task | undefined> {
     const [task] = await db.select().from(tasks)
-      .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+      .where(eq(tasks.id, id));
     return task || undefined;
   }
 
-  async createTask(taskData: InsertTask & { userId: number }): Promise<Task> {
+  async createTask(taskData: InsertTask): Promise<Task> {
     const [task] = await db
       .insert(tasks)
-      .values(taskData)
+      .values({ ...taskData, userId: 1 }) // Default user ID for non-authenticated mode
       .returning();
     return task;
   }
 
-  async updateTask(id: number, userId: number, updates: Partial<UpdateTask>): Promise<Task | undefined> {
+  async updateTask(id: number, updates: Partial<UpdateTask>): Promise<Task | undefined> {
     const [task] = await db
       .update(tasks)
       .set({ ...updates, updatedAt: new Date() })
-      .where(and(eq(tasks.id, id), eq(tasks.userId, userId)))
+      .where(eq(tasks.id, id))
       .returning();
     return task;
   }
 
-  async deleteTask(id: number, userId: number): Promise<boolean> {
+  async deleteTask(id: number): Promise<boolean> {
     const result = await db
       .delete(tasks)
-      .where(and(eq(tasks.id, id), eq(tasks.userId, userId)));
+      .where(eq(tasks.id, id));
     return (result.rowCount || 0) > 0;
   }
 
-  async getTaskStats(userId: number): Promise<{
+  async getTaskStats(): Promise<{
     total: number;
     completed: number;
     pending: number;
     overdue: number;
   }> {
-    const userTasks = await db.select().from(tasks).where(eq(tasks.userId, userId));
-    const total = userTasks.length;
-    const completed = userTasks.filter(task => task.completed).length;
-    const pending = userTasks.filter(task => !task.completed).length;
+    const allTasks = await db.select().from(tasks);
+    const total = allTasks.length;
+    const completed = allTasks.filter(task => task.completed).length;
+    const pending = allTasks.filter(task => !task.completed).length;
     
     const now = new Date();
-    const overdue = userTasks.filter(task => 
+    const overdue = allTasks.filter(task => 
       !task.completed && 
       task.dueDate && 
       new Date(task.dueDate) < now
@@ -177,17 +176,16 @@ class MemStorage implements IStorage {
   }
 
   // Task methods
-  async getTasks(userId: number): Promise<Task[]> {
-    const userTasks = Array.from(this.tasks.values()).filter(task => task.userId === userId);
-    return userTasks.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  async getTasks(): Promise<Task[]> {
+    const allTasks = Array.from(this.tasks.values());
+    return allTasks.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getTask(id: number, userId: number): Promise<Task | undefined> {
-    const task = this.tasks.get(id);
-    return task && task.userId === userId ? task : undefined;
+  async getTask(id: number): Promise<Task | undefined> {
+    return this.tasks.get(id);
   }
 
-  async createTask(taskData: InsertTask & { userId: number }): Promise<Task> {
+  async createTask(taskData: InsertTask): Promise<Task> {
     const task: Task = {
       id: this.nextTaskId++,
       title: taskData.title,
@@ -195,7 +193,7 @@ class MemStorage implements IStorage {
       priority: taskData.priority || 'medium',
       dueDate: taskData.dueDate || null,
       completed: taskData.completed || false,
-      userId: taskData.userId,
+      userId: 1, // Default user ID for non-authenticated mode
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -204,8 +202,8 @@ class MemStorage implements IStorage {
     return task;
   }
 
-  async updateTask(id: number, userId: number, updates: Partial<UpdateTask>): Promise<Task | undefined> {
-    const task = await this.getTask(id, userId);
+  async updateTask(id: number, updates: Partial<UpdateTask>): Promise<Task | undefined> {
+    const task = await this.getTask(id);
     if (!task) return undefined;
     
     const updatedTask: Task = {
@@ -218,27 +216,27 @@ class MemStorage implements IStorage {
     return updatedTask;
   }
 
-  async deleteTask(id: number, userId: number): Promise<boolean> {
-    const task = await this.getTask(id, userId);
+  async deleteTask(id: number): Promise<boolean> {
+    const task = await this.getTask(id);
     if (!task) return false;
     
     return this.tasks.delete(id);
   }
 
-  async getTaskStats(userId: number): Promise<{
+  async getTaskStats(): Promise<{
     total: number;
     completed: number;
     pending: number;
     overdue: number;
   }> {
-    const userTasks = await this.getTasks(userId);
+    const allTasks = await this.getTasks();
     const now = new Date();
     
     const stats = {
-      total: userTasks.length,
-      completed: userTasks.filter(t => t.completed).length,
-      pending: userTasks.filter(t => !t.completed).length,
-      overdue: userTasks.filter(t => 
+      total: allTasks.length,
+      completed: allTasks.filter(t => t.completed).length,
+      pending: allTasks.filter(t => !t.completed).length,
+      overdue: allTasks.filter(t => 
         !t.completed && t.dueDate && new Date(t.dueDate) < now
       ).length,
     };
