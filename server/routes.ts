@@ -4,17 +4,14 @@ import { storage } from "./storage";
 import { insertTaskSchema, updateTaskSchema, loginUserSchema, signupUserSchema } from "@shared/schema";
 import { z } from "zod";
 import session from "express-session";
-import connectPg from "connect-pg-simple";
+import MemoryStore from "memorystore";
 
 // Session configuration
 const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
-const pgStore = connectPg(session);
+const memStore = MemoryStore(session);
 
-const sessionStore = new pgStore({
-  conString: process.env.DATABASE_URL,
-  createTableIfMissing: true,
-  ttl: sessionTtl,
-  tableName: "session",
+const sessionStore = new memStore({
+  checkPeriod: 86400000, // prune expired entries every 24h
 });
 
 // Middleware to check authentication

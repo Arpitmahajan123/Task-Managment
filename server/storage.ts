@@ -126,4 +126,125 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-export const storage = new DatabaseStorage();
+// Use MemStorage for now, will switch to MongoDB later
+class MemStorage implements IStorage {
+  private users: Map<number, User> = new Map();
+  private tasks: Map<number, Task> = new Map();
+  private nextUserId = 1;
+  private nextTaskId = 1;
+
+  // User methods
+  async getUser(id: number): Promise<User | undefined> {
+    return this.users.get(id);
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const users = Array.from(this.users.values());
+    return users.find(user => user.username === username);
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const users = Array.from(this.users.values());
+    return users.find(user => user.email === email);
+  }
+
+  async createUser(userData: InsertUser): Promise<User> {
+    const bcrypt = await import('bcryptjs');
+    const hashedPassword = await bcrypt.hash(userData.password, 10);
+    
+    const user: User = {
+      id: this.nextUserId++,
+      username: userData.username,
+      email: userData.email,
+      password: hashedPassword,
+      firstName: userData.firstName || null,
+      lastName: userData.lastName || null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    this.users.set(user.id, user);
+    return user;
+  }
+
+  async validateUser(username: string, password: string): Promise<User | null> {
+    const user = await this.getUserByUsername(username);
+    if (!user) return null;
+    
+    const bcrypt = await import('bcryptjs');
+    const isValid = await bcrypt.compare(password, user.password);
+    return isValid ? user : null;
+  }
+
+  // Task methods
+  async getTasks(userId: number): Promise<Task[]> {
+    const userTasks = Array.from(this.tasks.values()).filter(task => task.userId === userId);
+    return userTasks.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getTask(id: number, userId: number): Promise<Task | undefined> {
+    const task = this.tasks.get(id);
+    return task && task.userId === userId ? task : undefined;
+  }
+
+  async createTask(taskData: InsertTask & { userId: number }): Promise<Task> {
+    const task: Task = {
+      id: this.nextTaskId++,
+      title: taskData.title,
+      description: taskData.description || null,
+      priority: taskData.priority || 'medium',
+      dueDate: taskData.dueDate || null,
+      completed: taskData.completed || false,
+      userId: taskData.userId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    this.tasks.set(task.id, task);
+    return task;
+  }
+
+  async updateTask(id: number, userId: number, updates: Partial<UpdateTask>): Promise<Task | undefined> {
+    const task = await this.getTask(id, userId);
+    if (!task) return undefined;
+    
+    const updatedTask: Task = {
+      ...task,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    
+    this.tasks.set(id, updatedTask);
+    return updatedTask;
+  }
+
+  async deleteTask(id: number, userId: number): Promise<boolean> {
+    const task = await this.getTask(id, userId);
+    if (!task) return false;
+    
+    return this.tasks.delete(id);
+  }
+
+  async getTaskStats(userId: number): Promise<{
+    total: number;
+    completed: number;
+    pending: number;
+    overdue: number;
+  }> {
+    const userTasks = await this.getTasks(userId);
+    const now = new Date();
+    
+    const stats = {
+      total: userTasks.length,
+      completed: userTasks.filter(t => t.completed).length,
+      pending: userTasks.filter(t => !t.completed).length,
+      overdue: userTasks.filter(t => 
+        !t.completed && t.dueDate && new Date(t.dueDate) < now
+      ).length,
+    };
+    
+    return stats;
+  }
+}
+
+export const storage = new MemStorage();
